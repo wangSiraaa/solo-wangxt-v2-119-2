@@ -8,10 +8,11 @@ import {
   useRef,
 } from 'react';
 import type { ReactNode } from 'react';
-import type { MeshData, MeshStats, ProjectRecord } from '../core/types';
+import type { MeshData, MeshStats, ProjectRecord, InspectionRules, InspectionReport } from '../core/types';
 import { parseObj } from '../core/parser';
 import { analyzeMesh } from '../core/metrics';
 import { exportObj } from '../core/exporter';
+import { inspectMesh, sanitizeRules, buildSummaryJson, DEFAULT_RULES } from '../core/inspection';
 import { unwrapWithXAtlas } from '../core/unwrapping';
 import {
   deleteProject,
@@ -37,6 +38,9 @@ export interface AppState {
   checkerScale: number;
   showFlipped: boolean;
   showOverlap: boolean;
+  showDensity: boolean;
+  showAngle: boolean;
+  rules: InspectionRules;
   unwrapping: boolean;
   notice: Notice | null;
   history: MeshData[];
@@ -48,7 +52,8 @@ type Action =
   | { type: 'select'; faceIds: Set<number> }
   | { type: 'toggle-face'; faceId: number }
   | { type: 'set-checker'; on: boolean; scale?: number }
-  | { type: 'toggle-flag'; key: 'showFlipped' | 'showOverlap' }
+  | { type: 'toggle-flag'; key: 'showFlipped' | 'showOverlap' | 'showDensity' | 'showAngle' }
+  | { type: 'set-rules'; rules: InspectionRules }
   | { type: 'unwrapping'; on: boolean }
   | { type: 'notice'; notice: Notice | null }
   | { type: 'project-id'; id: string | null }
@@ -93,6 +98,8 @@ function reducer(state: AppState, action: Action): AppState {
       };
     case 'toggle-flag':
       return { ...state, [action.key]: !state[action.key] };
+    case 'set-rules':
+      return { ...state, rules: action.rules };
     case 'unwrapping':
       return { ...state, unwrapping: action.on };
     case 'notice':
@@ -117,11 +124,15 @@ function reducer(state: AppState, action: Action): AppState {
 
 export interface AppContextValue {
   state: AppState;
+  report: InspectionReport | null;
   loadObjText: (text: string, fileName: string, projectId?: string | null) => void;
   selectFaces: (faceIds: Set<number>) => void;
   toggleFace: (faceId: number) => void;
   setChecker: (on: boolean, scale?: number) => void;
-  toggleFlag: (key: 'showFlipped' | 'showOverlap') => void;
+  toggleFlag: (key: 'showFlipped' | 'showOverlap' | 'showDensity' | 'showAngle') => void;
+  setRules: (rules: Partial<InspectionRules>) => void;
+  resetRules: () => void;
+  exportSummary: () => void;
   runUnwrap: () => Promise<void>;
   exportCurrent: () => void;
   saveCurrent: () => Promise<void>;
@@ -147,6 +158,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     checkerScale: 8,
     showFlipped: true,
     showOverlap: true,
+    showDensity: true,
+    showAngle: true,
+    rules: DEFAULT_RULES,
     unwrapping: false,
     notice: null,
     history: [] as MeshData[],
@@ -154,6 +168,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const stateRef = useRef(state);
   stateRef.current = state;
+
+  // 检查报告由“模型分析结果 + 本次规则”派生：改阈值只重新判定，
+  // stats（指标数值）与 mesh（UV）均不重算、不修改。
+  const report: InspectionReport | null = useMemo(
+    () => (state.mesh && state.stats ? inspectMesh(state.mesh, state.stats, state.rules) : null),
+    [state.mesh, state.stats, state.rules],
+  );
 
   const [projects, setProjects] = useReducer(
     (_: ProjectRecord[], next: ProjectRecord[]) => next,
@@ -211,8 +232,35 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const setChecker = useCallback((on: boolean, scale?: number) => {
     dispatch({ type: 'set-checker', on, scale });
   }, []);
-  const toggleFlag = useCallback((key: 'showFlipped' | 'showOverlap') => {
+  const toggleFlag = useCallback((key: 'showFlipped' | 'showOverlap' | 'showDensity' | 'showAngle') => {
     dispatch({ type: 'toggle-flag', key });
+  }, []);
+  const setRules = useCallback((rules: Partial<InspectionRules>) => {
+    dispatch({ type: 'set-rules', rules: sanitizeRules({ ...stateRef.current.rules, ...rules }) });
+  }, []);
+  const resetRules = useCallback(() => {
+    dispatch({ type: 'set-rules', rules: DEFAULT_RULES });
+  }, []);
+  const exportSummary = useCallback(() => {
+    const cur = stateRef.current.mesh;
+    const rep = stateRef.current.mesh && stateRef.current.stats
+      ? inspectMesh(stateRef.current.mesh, stateRef.current.stats, stateRef.current.rules)
+      : null;
+    if (!cur || !rep) return;
+    const json = buildSummaryJson(rep);
+    const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = cur.fileName.replace(/\.obj$/i, '') + '_inspection.json';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    dispatch({
+      type: 'notice',
+      notice: { kind: 'success', text: `已导出 JSON 检查摘要（${rep.issueFaceCount} 个问题面）` },
+    });
   }, []);
 
   const runUnwrap = useCallback(async () => {
@@ -334,11 +382,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const value = useMemo<AppContextValue>(
     () => ({
       state,
+      report,
       loadObjText,
       selectFaces,
       toggleFace,
       setChecker,
       toggleFlag,
+      setRules,
+      resetRules,
+      exportSummary,
       runUnwrap,
       exportCurrent,
       saveCurrent,
@@ -349,9 +401,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       notify,
       undo,
     }),
-    [state, projects, loadObjText, selectFaces, toggleFace, setChecker,
-      toggleFlag, runUnwrap, exportCurrent, saveCurrent, refreshProjects,
-      openProject, removeProject, notify, undo],
+    [state, report, projects, loadObjText, selectFaces, toggleFace, setChecker,
+      toggleFlag, setRules, resetRules, exportSummary, runUnwrap, exportCurrent,
+      saveCurrent, refreshProjects, openProject, removeProject, notify, undo],
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

@@ -1,6 +1,7 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../state/AppContext';
-import type { TriMetrics } from '../core/types';
+import type { InspectionReport, IssueKind } from '../core/types';
+import { facesByKind } from '../core/inspection';
 
 function fmt(n: number | null | undefined, digits = 3): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return '—';
@@ -14,7 +15,7 @@ function densityPct(r: number | null): string {
   return `${pct >= 0 ? '+' : ''}${pct.toFixed(0)}%`;
 }
 
-function aggregate(ms: TriMetrics[]) {
+function aggregate(ms: { areaRatio: number | null; angleDistortion: number | null }[]) {
   const valid = ms.filter((m) => m.areaRatio !== null);
   if (valid.length === 0) {
     return { count: ms.length, valid: 0, maxRatio: null, maxAngle: null };
@@ -28,23 +29,22 @@ function aggregate(ms: TriMetrics[]) {
   return { count: ms.length, valid: valid.length, maxRatio, maxAngle };
 }
 
+const ISSUE_LABELS: Record<IssueKind, string> = {
+  density: '面积密度超限',
+  angle: '角度畸变超限',
+  flipped: '翻转三角形',
+  overlap: '岛间重叠',
+  degenerate: '退化面',
+};
+
 export function StatsPanel() {
-  const { state, selectFaces } = useApp();
-  const { mesh, stats, selectedFaceIds } = state;
+  const { state, report, selectFaces, setRules, resetRules, exportSummary } = useApp();
+  const { mesh, stats, selectedFaceIds, rules } = state;
 
   const summary = useMemo(() => {
     if (!mesh || !stats) return null;
-    const triInFace = new Map<number, number[]>();
-    mesh.triangles.forEach((t) => {
-      const list = triInFace.get(t.faceId);
-      if (list) list.push(t.id);
-      else triInFace.set(t.faceId, [t.id]);
-    });
-
     let deg3 = 0;
     let degUv = 0;
-    let flipped = 0;
-    let overlap = 0;
     const ratioValid: number[] = [];
     const angles: number[] = [];
     let minR = Infinity;
@@ -52,7 +52,6 @@ export function StatsPanel() {
     for (const m of stats.metrics) {
       if (m.degenerate3d) deg3++;
       if (m.degenerateUv) degUv++;
-      if (m.flipped) flipped++;
       if (m.areaRatio !== null) {
         ratioValid.push(m.areaRatio);
         minR = Math.min(minR, m.areaRatio);
@@ -60,36 +59,20 @@ export function StatsPanel() {
       }
       if (m.angleDistortion !== null) angles.push(m.angleDistortion);
     }
-    for (let i = 0; i < stats.overlap.length; i++) if (stats.overlap[i]) overlap++;
 
     const boundary = stats.edges.filter((e) => e.boundary).length;
     const seam = stats.edges.filter((e) => e.seam).length;
     const nm = stats.edges.filter((e) => e.nonManifold).length;
     const mirroredIsl = stats.islands.filter((i) => i.mirrored).length;
 
-    // 异常面收集（点击定位）
-    const faceSetOf = (triIds: number[]) => {
-      const s = new Set<number>();
-      triIds.forEach((id) => s.add(mesh.triangles[id].faceId));
-      return s;
-    };
-    const flippedTris = stats.metrics.map((m, i) => (m.flipped ? i : -1)).filter((i) => i >= 0);
-    const overlapTris = [...stats.overlap].map((v, i) => (v ? i : -1)).filter((i) => i >= 0);
-    const degTris = stats.metrics
-      .map((m, i) => (m.degenerate3d || m.degenerateUv ? i : -1))
-      .filter((i) => i >= 0);
-
     return {
-      triInFace,
-      deg3, degUv, flipped, overlap,
+      deg3, degUv,
       minR: minR === Infinity ? null : minR,
       maxR: maxR === -Infinity ? null : maxR,
       maxAngle: angles.length ? Math.max(...angles) : null,
       boundary, seam, nm, mirroredIsl,
       islands: stats.islands.length,
-      flippedFaces: faceSetOf(flippedTris),
-      overlapFaces: faceSetOf(overlapTris),
-      degFaces: faceSetOf(degTris),
+      ratioCount: ratioValid.length,
     };
   }, [mesh, stats]);
 
@@ -109,14 +92,59 @@ export function StatsPanel() {
     return { agg, one, triCount: triIds.length };
   }, [mesh, stats, selectedFaceIds]);
 
-  if (!mesh || !stats || !summary) {
+  if (!mesh || !stats || !summary || !report) {
     return <aside className="panel">尚未载入模型。</aside>;
   }
 
-  const chip = (ok: boolean) => (ok ? 'bad' : 'ok');
+  const locate = (kind: IssueKind) => {
+    const s = facesByKind(report, kind);
+    if (s.size) selectFaces(s);
+  };
 
   return (
     <aside className="panel">
+      <RulesEditor rules={rules} onChange={setRules} onReset={resetRules} onExport={exportSummary} />
+
+      <section>
+        <h3>本次检查结果（按面）</h3>
+        <IssueRow
+          label={ISSUE_LABELS.density}
+          value={report.counts.density}
+          onLocate={() => locate('density')}
+          hint={`允许区间 ${rules.minRatio}× ~ ${rules.maxRatio}×`}
+        />
+        <IssueRow
+          label={ISSUE_LABELS.angle}
+          value={report.counts.angle}
+          onLocate={() => locate('angle')}
+          hint={`最大允许 ${rules.maxAngle}°`}
+        />
+        <IssueRow
+          label={ISSUE_LABELS.flipped}
+          value={report.counts.flipped}
+          onLocate={() => locate('flipped')}
+          hint={`镜像岛 ${summary.mirroredIsl} 个`}
+        />
+        <IssueRow
+          label={ISSUE_LABELS.overlap}
+          value={report.counts.overlap}
+          onLocate={() => locate('overlap')}
+        />
+        <IssueRow
+          label={ISSUE_LABELS.degenerate}
+          value={report.counts.degenerate}
+          onLocate={() => locate('degenerate')}
+          hint="退化面不参与密度/角度判定"
+        />
+        <div className="row">
+          <span className="k">问题面合计</span>
+          <span className={`v ${report.issueFaceCount > 0 ? 'bad' : 'ok'}`}>
+            {report.issueFaceCount} / {report.faceCount}
+          </span>
+        </div>
+        <IssueFaceList report={report} onLocate={selectFaces} />
+      </section>
+
       <section>
         <h3>拓扑</h3>
         <Row k="顶点身份 (v)" v={mesh.vertexCount} />
@@ -131,31 +159,8 @@ export function StatsPanel() {
         <Row k="UV 岛" v={summary.islands} />
         <Row k="边界边" v={summary.boundary} />
         <Row k="共享边接缝" v={summary.seam} cls={summary.seam ? 'warn' : 'ok'} />
-        <Row k="非流形边" v={summary.nm} cls={chip(summary.nm === 0)}
+        <Row k="非流形边" v={summary.nm} cls={summary.nm === 0 ? 'ok' : 'bad'}
           hint="≥3 个三角形共享的 3D 边" />
-      </section>
-
-      <section>
-        <h3>UV 健康</h3>
-        <IssueRow
-          label="翻转三角形 / 镜像岛"
-          value={`${summary.flipped} / ${summary.mirroredIsl}`}
-          bad={summary.flipped > 0}
-          onLocate={() => summary.flippedFaces.size && selectFaces(summary.flippedFaces)}
-        />
-        <IssueRow
-          label="岛间重叠三角形"
-          value={summary.overlap}
-          bad={summary.overlap > 0}
-          onLocate={() => summary.overlapFaces.size && selectFaces(summary.overlapFaces)}
-        />
-        <IssueRow
-          label="退化（3D / UV）"
-          value={`${summary.deg3} / ${summary.degUv}`}
-          bad={summary.deg3 + summary.degUv > 0}
-          onLocate={() => summary.degFaces.size && selectFaces(summary.degFaces)}
-          hint="退化面不参与比率与角度计算"
-        />
       </section>
 
       <section>
@@ -164,24 +169,19 @@ export function StatsPanel() {
         <Row
           k="最小 / 最大比率"
           v={`${fmt(summary.minR)}× / ${fmt(summary.maxR)}×`}
-          cls={summary.maxR !== null && (summary.maxR > 2 || summary.minR! < 0.5) ? 'warn' : 'ok'}
         />
-        <p className="hint">比率 1× = 与中位密度一致；0.5× 偏稀，2× 偏密。</p>
+        <p className="hint">比率 1× = 与中位密度一致；指标数值不随阈值变化。</p>
       </section>
 
       <section>
         <h3>角度畸变</h3>
-        <Row
-          k="全模型最大内角偏差"
-          v={`${fmt(summary.maxAngle, 1)}°`}
-          cls={summary.maxAngle !== null && summary.maxAngle > 15 ? 'warn' : 'ok'}
-        />
+        <Row k="全模型最大内角偏差" v={`${fmt(summary.maxAngle, 1)}°`} />
         <p className="hint">对应 3D/UV 内角最大差值；0° 为保角映射。</p>
       </section>
 
       <section>
         <h3>选中面{selectedFaceIds.size > 0 ? `（${selectedFaceIds.size} 面 / ${selectedAgg?.triCount ?? 0} 三角）` : ''}</h3>
-        {!selectedAgg && <p className="hint">在任一视图点选面；Shift+点击加选。</p>}
+        {!selectedAgg && <p className="hint">在任一视图点选面；Shift+点击加选；也可点问题行“定位”。</p>}
         {selectedAgg?.one && (
           <>
             <Row
@@ -210,6 +210,109 @@ export function StatsPanel() {
   );
 }
 
+function NumberField({
+  label, title, value, step, onCommit,
+}: {
+  label: string;
+  title: string;
+  value: number;
+  step: number;
+  onCommit: (n: number) => void;
+}) {
+  // 本地草稿：输入过程中允许 "0." / 空串等中间态，失焦或合法时提交。
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => setDraft(String(value)), [value]);
+  const commit = (raw: string) => {
+    const n = Number(raw);
+    if (Number.isFinite(n)) onCommit(n);
+    else setDraft(String(value));
+  };
+  return (
+    <label className="rule-field" title={title}>
+      <span>{label}</span>
+      <input
+        type="number"
+        value={draft}
+        step={step}
+        min={0}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          commit(e.target.value);
+        }}
+        onBlur={() => setDraft(String(value))}
+      />
+    </label>
+  );
+}
+
+function RulesEditor({
+  rules, onChange, onReset, onExport,
+}: {
+  rules: { minRatio: number; maxRatio: number; maxAngle: number };
+  onChange: (r: Partial<{ minRatio: number; maxRatio: number; maxAngle: number }>) => void;
+  onReset: () => void;
+  onExport: () => void;
+}) {
+  return (
+    <section className="rules">
+      <h3>本次检查规则 <button className="reset-rules" onClick={onReset}>恢复默认</button></h3>
+      <div className="rule-grid">
+        <NumberField label="比率下限 ×" title="面积比率允许区间下限（1 = 中位密度）"
+          value={rules.minRatio} step={0.05} onCommit={(n) => onChange({ minRatio: n })} />
+        <NumberField label="比率上限 ×" title="面积比率允许区间上限"
+          value={rules.maxRatio} step={0.05} onCommit={(n) => onChange({ maxRatio: n })} />
+        <NumberField label="最大角度 °" title="允许的最大角度畸变"
+          value={rules.maxAngle} step={1} onCommit={(n) => onChange({ maxAngle: n })} />
+      </div>
+      <p className="hint">阈值只改变超限判定，不修改 UV，指标数值保持不变；翻转/重叠/退化算法不变。</p>
+      <button className="export-summary" onClick={onExport}>导出 JSON 检查摘要</button>
+    </section>
+  );
+}
+
+/** 问题面清单（可滚动、逐条点击定位，双视图同步高亮）。 */
+function IssueFaceList({
+  report, onLocate,
+}: {
+  report: InspectionReport;
+  onLocate: (faceIds: Set<number>) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const issues = report.faces.filter((f) => f.kinds.length > 0);
+  if (issues.length === 0) {
+    return <p className="hint ok-text">当前规则下没有超限面。</p>;
+  }
+  return (
+    <div className="issue-list-wrap">
+      <button className="expand" onClick={() => setExpanded(!expanded)}>
+        {expanded ? '收起' : '展开'}问题面清单（{issues.length}）
+      </button>
+      {expanded && (
+        <ul className="issue-list">
+          {issues.map((f) => (
+            <li
+              key={f.faceId}
+              onClick={() => onLocate(new Set([f.faceId]))}
+              title="点击在 3D / UV 双视图定位该面"
+            >
+              <b>面 {f.faceId}</b>
+              <span className="issue-tags">
+                {f.kinds.map((k) => (
+                  <i key={k} className={`tag tag-${k}`}>{ISSUE_LABELS[k]}</i>
+                ))}
+              </span>
+              <span className="issue-metrics">
+                {f.areaRatio !== null && `比率 ${fmt(f.minAreaRatio)}×~${fmt(f.areaRatio)}×`}
+                {f.angleDistortion !== null && ` · ${fmt(f.angleDistortion, 1)}°`}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function Row({ k, v, cls, hint }: { k: string; v: string | number; cls?: string; hint?: string }) {
   return (
     <div className={`row ${cls ?? ''}`}>
@@ -220,14 +323,14 @@ function Row({ k, v, cls, hint }: { k: string; v: string | number; cls?: string;
 }
 
 function IssueRow({
-  label, value, bad, onLocate, hint,
+  label, value, onLocate, hint,
 }: {
   label: string;
-  value: string | number;
-  bad: boolean;
+  value: number;
   onLocate: () => void;
   hint?: string;
 }) {
+  const bad = value > 0;
   return (
     <div className={`row issue ${bad ? 'bad' : 'ok'}`} title={hint}>
       <span className="k">{label}</span>

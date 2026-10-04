@@ -131,3 +131,48 @@ export interface ProjectRecord {
   objText: string;
   fileName: string;
 }
+
+/**
+ * 本次检查规则（美术验收可按资产类型收紧/放宽）。
+ * 规则只参与判定，绝不修改 UV 与任何原始指标数值。
+ *
+ * - minRatio/maxRatio：面积畸变比率允许区间（1 = 与中位纹素密度一致）；
+ * - maxAngle：允许的最大角度畸变（度）。
+ */
+export interface InspectionRules {
+  minRatio: number;
+  maxRatio: number;
+  maxAngle: number;
+}
+
+/** 面级问题类别。翻转/重叠/退化沿用既有算法，密度/角度由本次规则判定。 */
+export type IssueKind = 'density' | 'angle' | 'flipped' | 'overlap' | 'degenerate';
+
+export interface FaceIssue {
+  faceId: number;
+  density: boolean;
+  angle: boolean;
+  flipped: boolean;
+  overlap: boolean;
+  /** 面内是否存在任一退化三角形（3D 或 UV）。 */
+  degenerate: boolean;
+  /** 面内最坏（最大）面积比率；面内全退化时为 null。 */
+  areaRatio: number | null;
+  /** 面内最坏（最小）面积比率；面内全退化时为 null。 */
+  minAreaRatio: number | null;
+  /** 面内最坏角度畸变（度）；面内全退化时为 null。 */
+  angleDistortion: number | null;
+  /** 触发问题的类别集合（便于导出/着色）。 */
+  kinds: IssueKind[];
+}
+
+export interface InspectionReport {
+  rules: InspectionRules;
+  modelName: string;
+  faceCount: number;
+  triCount: number;
+  counts: Record<IssueKind, number>;
+  /** 至少存在一类问题的面数（同一面只计一次）。 */
+  issueFaceCount: number;
+  faces: FaceIssue[];
+}

@@ -4,7 +4,7 @@ import { SAMPLES } from '../core/samples';
 
 export function Toolbar() {
   const {
-    state, loadObjText, runUnwrap, exportCurrent, saveCurrent,
+    state, loadObjText, runUnwrap, exportCurrent, exportSummary, saveCurrent,
     projects, openProject, removeProject, setChecker, toggleFlag, undo,
   } = useApp();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -96,12 +96,32 @@ export function Toolbar() {
         />
         重叠
       </label>
+      <label className="chk" title="面积比率超出本次规则区间的面">
+        <input
+          type="checkbox"
+          checked={state.showDensity}
+          onChange={() => toggleFlag('showDensity')}
+        />
+        密度超限
+      </label>
+      <label className="chk" title="角度畸变超过本次规则上限的面">
+        <input
+          type="checkbox"
+          checked={state.showAngle}
+          onChange={() => toggleFlag('showAngle')}
+        />
+        角度超限
+      </label>
 
       <span className="sep" />
 
       <button disabled={!state.mesh} onClick={exportCurrent}
         title="导出非索引 v/vt OBJ，标准工具可重新载入验证">
         导出 UV OBJ
+      </button>
+      <button disabled={!state.mesh} onClick={exportSummary}
+        title="导出包含规则、模型名、问题面 ID 及指标的 JSON 检查摘要">
+        导出检查摘要
       </button>
       <button disabled={!state.mesh} onClick={() => void saveCurrent()}>
         存工程

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { useApp } from '../state/AppContext';
@@ -6,11 +6,12 @@ import {
   buildUvEdges,
   buildUvFills,
   buildUvSelection,
+  buildRuleFlags,
 } from '../three/geometry';
 import type { MeshData } from '../core/types';
 
 export function View2D() {
-  const { state, selectFaces, toggleFace } = useApp();
+  const { state, report, selectFaces, toggleFace } = useApp();
   const mountRef = useRef<HTMLDivElement>(null);
 
   const worldRef = useRef<{
@@ -155,6 +156,10 @@ export function View2D() {
   }, []);
 
   const { mesh: meshData, stats } = state;
+  const ruleFlags = useMemo(
+    () => buildRuleFlags(meshData ?? null, report),
+    [meshData, report],
+  );
 
   // 重建填充与分类边
   useEffect(() => {
@@ -165,6 +170,9 @@ export function View2D() {
     const fg = buildUvFills(meshData, stats, {
       showFlipped: state.showFlipped,
       showOverlap: state.showOverlap,
+      ruleFlags,
+      showDensity: state.showDensity,
+      showAngle: state.showAngle,
     });
     world.fills.geometry.dispose();
     world.fills.geometry = fg;
@@ -199,7 +207,8 @@ export function View2D() {
       world.lastFitMesh = meshData;
       world.zoomFit();
     }
-  }, [meshData, stats, state.showFlipped, state.showOverlap]);
+  }, [meshData, stats, ruleFlags, state.showFlipped, state.showOverlap,
+    state.showDensity, state.showAngle]);
 
   // 选择高亮
   useEffect(() => {

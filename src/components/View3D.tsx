@@ -5,13 +5,14 @@ import { useApp } from '../state/AppContext';
 import {
   buildFlagColors,
   buildNonIndexedPositions,
+  buildRuleFlags,
   buildSelectionOverlay,
   makeCheckerTexture,
 } from '../three/geometry';
 import type { MeshData } from '../core/types';
 
 export function View3D() {
-  const { state, selectFaces, toggleFace } = useApp();
+  const { state, report, selectFaces, toggleFace } = useApp();
   const mountRef = useRef<HTMLDivElement>(null);
 
   const worldRef = useRef<{
@@ -134,6 +135,10 @@ export function View3D() {
 
   // 模型/标记变化时重建几何
   const { mesh: meshData, stats } = state;
+  const ruleFlags = useMemo(
+    () => buildRuleFlags(meshData ?? null, report),
+    [meshData, report],
+  );
   useEffect(() => {
     const world = worldRef.current;
     if (!world || !meshData || !stats) return;
@@ -148,6 +153,8 @@ export function View3D() {
       stats,
       state.showFlipped,
       state.showOverlap,
+      ruleFlags,
+      { showDensity: state.showDensity, showAngle: state.showAngle },
     );
     geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
@@ -208,7 +215,8 @@ export function View3D() {
     world.camera.updateProjectionMatrix();
     world.controls.target.copy(center);
     world.controls.update();
-  }, [meshData, stats, state.checkerOn, state.checkerScale, state.showFlipped, state.showOverlap]);
+  }, [meshData, stats, ruleFlags, state.checkerOn, state.checkerScale, state.showFlipped,
+    state.showOverlap, state.showDensity, state.showAngle]);
 
   // 选择集 -> 覆盖网格
   useEffect(() => {

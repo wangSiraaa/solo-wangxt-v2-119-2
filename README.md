@@ -19,6 +19,8 @@ npx esbuild scripts/test-core.ts --bundle --format=esm --platform=node \
   --outfile=/tmp/t.mjs && node /tmp/t.mjs
 npx esbuild scripts/test-unwrap-fail.ts --bundle --format=esm --platform=node \
   --outfile=/tmp/u.mjs && node /tmp/u.mjs
+npx esbuild scripts/test-rules.ts --bundle --format=esm --platform=node \
+  --outfile=/tmp/r.mjs && node /tmp/r.mjs
 
 npm run build && npx vite preview --port 5199
 # 另一个终端：
@@ -38,6 +40,8 @@ node --import tsx scripts/e2e.ts
 | 棋盘纹理辅助判断 | 程序化 Canvas 棋盘，可开关、可选 4/8/16/32 格 |
 | 面积畸变 / 角度畸变分别显示 | `src/core/metrics.ts`，面板分区显示 |
 | 退化面不参与普通比率计算 | 薄片（sliver）判据，比率与角度为 `null` |
+| 本次检查规则可调 | 面板设置面积比率允许区间与最大角度，按面出超限结果 |
+| 问题面定位与 JSON 摘要 | 分类行/清单点击在双视图定位，导出含规则、模型名、问题面 ID 及指标的 JSON |
 | 镜像岛、共享边接缝、非流形边样例 | 「样例」菜单四个内置模型 |
 | 自动展开失败保留原模型 | `runUnwrap` 只在成功返回时 `replace-mesh`；入参不被修改 |
 | 导出 UV 可被标准工具重载验证 | 非索引 `v/vt` OBJ；e2e 已做导出→重载往返断言 |
@@ -74,6 +78,29 @@ UV 岛的连通要求**同时**满足 3D 共享边且该边两端 UV 一致—�
   比率/角度为 `—`，也不参与岛间重叠检测。
 - **岛间重叠**：包围盒分桶 + Sutherland–Hodgman 求交面积，跨岛且
   交叠面积显著非零才标记。
+
+## 本次检查规则（验收阈值）
+
+不同资产的验收尺度不同，右侧面板「本次检查规则」可设三个量：
+
+- 面积比率允许区间 `[minRatio, maxRatio]`（默认 `0.5× ~ 2×`）；
+- 最大角度畸变 `maxAngle`（默认 `15°`）。
+
+规则只做**判定层**的事（`src/core/inspection.ts`）：报告由
+`analyzeMesh` 的既有指标 + 当前规则 `useMemo` 派生，改阈值不重算
+指标、不修改 UV；翻转 / 重叠 / 退化三类完全沿用既有算法。判定按
+**面**聚合（n 边形的任一三角形超限即标该面），面板给出每类问题面
+数量、问题面合计与可展开清单，分类行或清单条目都可点击，选择集是
+faceId 集合，3D / UV 双视图同步高亮。退化三角形的比率/角度为
+`null`，在聚合时被跳过，因此退化面只会进「退化」类，绝不会被误算
+成密度或角度超限。
+
+「导出检查摘要」产出
+`*_inspection.json`：`schema`、规则（比率区间 + 角度上限）、模型名、
+面/三角总数、按类计数、问题面合计，以及每个问题面的 `faceId`、
+问题类别（`density` 细分 `sparse`/`dense`、`angle`、`flipped`、
+`overlap`、`degenerate`）与该面最坏面积比率、角度畸变指标。摘要与
+当前界面同源同值；重新载入模型后规则仍在，可继续检查。
 
 ## xatlas 身份映射
 

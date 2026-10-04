@@ -1,6 +1,27 @@
 import * as THREE from 'three';
-import type { MeshData, MeshStats } from '../core/types';
+import type { InspectionReport, MeshData, MeshStats } from '../core/types';
 import { cornerPos, cornerUv } from '../core/parser';
+
+/**
+ * 按本次规则把面级判定展开到三角形（同面三角形同色）。
+ * 返回的 Uint8 标志：1=密度超限 2=角度超限。
+ */
+export function buildRuleFlags(mesh: MeshData | null, report: InspectionReport | null): Uint8Array {
+  if (!mesh) return new Uint8Array(0);
+  const flags = new Uint8Array(mesh.triangles.length);
+  if (!report) return flags;
+  const byFace = new Map<number, number>();
+  for (const f of report.faces) {
+    let v = 0;
+    if (f.density) v |= 1;
+    if (f.angle) v |= 2;
+    if (v) byFace.set(f.faceId, v);
+  }
+  for (const t of mesh.triangles) {
+    flags[t.id] = byFace.get(t.faceId) ?? 0;
+  }
+  return flags;
+}
 
 /**
  * 所有渲染几何都按角点展开（非索引）：接缝两侧即使共享同一个 v 身份，
@@ -39,14 +60,21 @@ export function buildFlagColors(
   stats: MeshStats,
   showFlipped: boolean,
   showOverlap: boolean,
+  ruleFlags?: Uint8Array,
+  opts: { showDensity?: boolean; showAngle?: boolean } = {},
 ): Float32Array {
+  const showDensity = opts.showDensity ?? true;
+  const showAngle = opts.showAngle ?? true;
   const out = new Float32Array(mesh.triangles.length * 9).fill(1);
   for (const t of mesh.triangles) {
     const m = stats.metrics[t.id];
     let color: [number, number, number] | null = null;
+    // 退化优先级最高；退化三角形的指标为 null，天然不带密度/角度标志。
     if (m.degenerate3d || m.degenerateUv) color = [0.35, 0.35, 0.4];
     else if (showOverlap && stats.overlap[t.id]) color = [1.0, 0.55, 0.05];
     else if (showFlipped && m.flipped) color = [1.0, 0.25, 0.35];
+    else if (showDensity && ruleFlags && (ruleFlags[t.id] & 1)) color = [0.95, 0.35, 0.95];
+    else if (showAngle && ruleFlags && (ruleFlags[t.id] & 2)) color = [0.35, 0.8, 1.0];
     if (color) {
       for (let k = 0; k < 3; k++) {
         out[t.id * 9 + k * 3] = color[0];
@@ -144,8 +172,16 @@ export function buildUvSelection(
 export function buildUvFills(
   mesh: MeshData,
   stats: MeshStats,
-  opts: { showFlipped: boolean; showOverlap: boolean },
+  opts: {
+    showFlipped: boolean;
+    showOverlap: boolean;
+    ruleFlags?: Uint8Array;
+    showDensity?: boolean;
+    showAngle?: boolean;
+  },
 ): THREE.BufferGeometry {
+  const showDensity = opts.showDensity ?? true;
+  const showAngle = opts.showAngle ?? true;
   const pos: number[] = [];
   const col: number[] = [];
   const islandOfTri = new Int32Array(mesh.triangles.length).fill(-1);
@@ -159,6 +195,8 @@ export function buildUvFills(
     if (m.degenerate3d || m.degenerateUv) rgb = [0.32, 0.32, 0.38];
     else if (opts.showOverlap && stats.overlap[t.id]) rgb = [1.0, 0.55, 0.1];
     else if (opts.showFlipped && m.flipped) rgb = [1.0, 0.35, 0.45];
+    else if (showDensity && opts.ruleFlags && (opts.ruleFlags[t.id] & 1)) rgb = [0.95, 0.4, 0.95];
+    else if (showAngle && opts.ruleFlags && (opts.ruleFlags[t.id] & 2)) rgb = [0.4, 0.82, 1.0];
     else rgb = islandColor(islandOfTri[t.id]);
 
     for (let k = 0; k < 3; k++) {
