@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { useApp } from '../state/AppContext';
@@ -7,6 +7,7 @@ import {
   buildUvFills,
   buildUvSelection,
 } from '../three/geometry';
+import { evaluateRules } from '../core/rules';
 import type { MeshData } from '../core/types';
 
 export function View2D() {
@@ -155,6 +156,10 @@ export function View2D() {
   }, []);
 
   const { mesh: meshData, stats } = state;
+  const evaluation = useMemo(
+    () => (meshData && stats ? evaluateRules(meshData, stats, state.rules) : null),
+    [meshData, stats, state.rules],
+  );
 
   // 重建填充与分类边
   useEffect(() => {
@@ -165,6 +170,8 @@ export function View2D() {
     const fg = buildUvFills(meshData, stats, {
       showFlipped: state.showFlipped,
       showOverlap: state.showOverlap,
+      ruleMask: evaluation?.triMask ?? null,
+      showRules: state.showRules,
     });
     world.fills.geometry.dispose();
     world.fills.geometry = fg;
@@ -199,7 +206,7 @@ export function View2D() {
       world.lastFitMesh = meshData;
       world.zoomFit();
     }
-  }, [meshData, stats, state.showFlipped, state.showOverlap]);
+  }, [meshData, stats, state.showFlipped, state.showOverlap, state.showRules, evaluation]);
 
   // 选择高亮
   useEffect(() => {

@@ -1,6 +1,14 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../state/AppContext';
 import type { TriMetrics } from '../core/types';
+import {
+  DEFAULT_RULES,
+  buildCheckSummary,
+  evaluateRules,
+  sanitizeRules,
+} from '../core/rules';
+import type { CheckRules, RuleIssue } from '../core/rules';
+import { downloadText } from '../core/exporter';
 
 function fmt(n: number | null | undefined, digits = 3): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return '—';
@@ -28,33 +36,86 @@ function aggregate(ms: TriMetrics[]) {
   return { count: ms.length, valid: valid.length, maxRatio, maxAngle };
 }
 
+const ISSUE_LABEL: Record<RuleIssue, string> = {
+  'density-low': '偏稀',
+  'density-high': '偏密',
+  angle: '角度',
+};
+
+/**
+ * 阈值数字输入：输入过程保留本地字符串（允许临时中间态），合法时立即
+ * 提交，失焦时回到已提交值。只提交数值给规则，不改 UV。
+ */
+function RuleNumberInput({
+  value, onCommit, step, min, max, testid,
+}: {
+  value: number;
+  onCommit: (v: number) => void;
+  step: number;
+  min: number;
+  max: number;
+  testid: string;
+}) {
+  const [text, setText] = useState(String(value));
+  const [focused, setFocused] = useState(false);
+  // 仅在未编辑时跟随外部值（恢复默认 / 外部改动）；编辑中保留用户输入。
+  useEffect(() => {
+    if (!focused) setText(String(value));
+  }, [value, focused]);
+
+  const commit = (raw: string) => {
+    const v = Number(raw);
+    // 合法数字立即提交（父端 sanitizeRules 负责夹取/去交叉）；
+    // 空串或中间态（如 "1."、"-"）等失焦时再回退。
+    if (raw.trim() !== '' && Number.isFinite(v)) onCommit(v);
+  };
+
+  return (
+    <input
+      className="rule-input"
+      type="number"
+      data-testid={testid}
+      value={text}
+      step={step}
+      min={min}
+      max={max}
+      onFocus={() => setFocused(true)}
+      onChange={(e) => {
+        setText(e.target.value);
+        commit(e.target.value);
+      }}
+      onBlur={() => {
+        setFocused(false);
+        setText(String(value));
+      }}
+    />
+  );
+}
+
 export function StatsPanel() {
-  const { state, selectFaces } = useApp();
+  const { state, selectFaces, setRules } = useApp();
   const { mesh, stats, selectedFaceIds } = state;
+  const rules: CheckRules = state.rules;
+
+  const evaluation = useMemo(
+    () => (mesh && stats ? evaluateRules(mesh, stats, rules) : null),
+    [mesh, stats, rules],
+  );
 
   const summary = useMemo(() => {
     if (!mesh || !stats) return null;
-    const triInFace = new Map<number, number[]>();
-    mesh.triangles.forEach((t) => {
-      const list = triInFace.get(t.faceId);
-      if (list) list.push(t.id);
-      else triInFace.set(t.faceId, [t.id]);
-    });
-
     let deg3 = 0;
     let degUv = 0;
     let flipped = 0;
     let overlap = 0;
-    const ratioValid: number[] = [];
-    const angles: number[] = [];
     let minR = Infinity;
     let maxR = -Infinity;
+    const angles: number[] = [];
     for (const m of stats.metrics) {
       if (m.degenerate3d) deg3++;
       if (m.degenerateUv) degUv++;
       if (m.flipped) flipped++;
       if (m.areaRatio !== null) {
-        ratioValid.push(m.areaRatio);
         minR = Math.min(minR, m.areaRatio);
         maxR = Math.max(maxR, m.areaRatio);
       }
@@ -80,7 +141,6 @@ export function StatsPanel() {
       .filter((i) => i >= 0);
 
     return {
-      triInFace,
       deg3, degUv, flipped, overlap,
       minR: minR === Infinity ? null : minR,
       maxR: maxR === -Infinity ? null : maxR,
@@ -109,9 +169,31 @@ export function StatsPanel() {
     return { agg, one, triCount: triIds.length };
   }, [mesh, stats, selectedFaceIds]);
 
-  if (!mesh || !stats || !summary) {
+  if (!mesh || !stats || !summary || !evaluation) {
     return <aside className="panel">尚未载入模型。</aside>;
   }
+
+  const r = evaluation.rules;
+  const updateRules = (patch: Partial<CheckRules>) =>
+    setRules(sanitizeRules({ ...r, ...patch }));
+
+  const isAreaOut = (v: number | null) =>
+    v !== null && (v < r.minRatio || v > r.maxRatio);
+  const isAngleOut = (v: number | null) => v !== null && v > r.maxAngle;
+
+  const locateFaces = (ids: number[]) => {
+    if (ids.length) selectFaces(new Set(ids));
+  };
+
+  const exportJson = () => {
+    const doc = buildCheckSummary(mesh, stats, evaluation);
+    const base = mesh.fileName.replace(/\.obj$/i, '') || 'model';
+    downloadText(
+      `${base}_check.json`,
+      JSON.stringify(doc, null, 2),
+      'application/json;charset=utf-8',
+    );
+  };
 
   const chip = (ok: boolean) => (ok ? 'bad' : 'ok');
 
@@ -136,7 +218,70 @@ export function StatsPanel() {
       </section>
 
       <section>
+        <h3>本次检查规则（仅判定，不改 UV）</h3>
+        <div className="rule-row">
+          <span className="k">面积比率允许区间</span>
+          <span className="rule-range">
+            <RuleNumberInput
+              value={r.minRatio}
+              onCommit={(v) => updateRules({ minRatio: v })}
+              step={0.05} min={0.000001} max={1000000} testid="rule-min-ratio"
+            />
+            <span className="rule-x">× ~</span>
+            <RuleNumberInput
+              value={r.maxRatio}
+              onCommit={(v) => updateRules({ maxRatio: v })}
+              step={0.05} min={0.000001} max={1000000} testid="rule-max-ratio"
+            />
+            <span className="rule-x">×</span>
+          </span>
+        </div>
+        <div className="rule-row">
+          <span className="k">最大角度偏差</span>
+          <span className="rule-range">
+            <RuleNumberInput
+              value={r.maxAngle}
+              onCommit={(v) => updateRules({ maxAngle: v })}
+              step={1} min={0} max={180} testid="rule-max-angle"
+            />
+            <span className="rule-x">°</span>
+          </span>
+        </div>
+        <div className="rule-actions">
+          <button
+            className="mini"
+            data-testid="rule-reset"
+            onClick={() => setRules(DEFAULT_RULES)}
+          >
+            恢复默认 0.5×~2× / 15°
+          </button>
+          <button className="mini primary" data-testid="export-json" onClick={exportJson}>
+            导出 JSON 摘要
+          </button>
+        </div>
+        <p className="hint">
+          超限面 {evaluation.problemFaces.length}（判定用三角形：
+          密度 {evaluation.areaTriCount} / 角度 {evaluation.angleTriCount}）。
+          边界取等号不超限；调阈值只改判定，翻转/重叠/退化算法不变。
+        </p>
+      </section>
+
+      <section>
         <h3>UV 健康</h3>
+        <IssueRow
+          label="面积密度超限面"
+          value={evaluation.areaFaceIds.length}
+          bad={evaluation.areaFaceIds.length > 0}
+          onLocate={() => locateFaces(evaluation.areaFaceIds)}
+          hint={`区间 ${r.minRatio}× ~ ${r.maxRatio}×，含边界`}
+        />
+        <IssueRow
+          label="角度偏差超限面"
+          value={evaluation.angleFaceIds.length}
+          bad={evaluation.angleFaceIds.length > 0}
+          onLocate={() => locateFaces(evaluation.angleFaceIds)}
+          hint={`最大允许 ${r.maxAngle}°，含边界`}
+        />
         <IssueRow
           label="翻转三角形 / 镜像岛"
           value={`${summary.flipped} / ${summary.mirroredIsl}`}
@@ -154,8 +299,37 @@ export function StatsPanel() {
           value={`${summary.deg3} / ${summary.degUv}`}
           bad={summary.deg3 + summary.degUv > 0}
           onLocate={() => summary.degFaces.size && selectFaces(summary.degFaces)}
-          hint="退化面不参与比率与角度计算"
+          hint="退化面不参与比率与角度计算，也不会算成密度超限"
         />
+
+        {evaluation.problemFaces.length > 0 && (
+          <ul className="problem-list" data-testid="problem-list">
+            {evaluation.problemFaces.map((f) => {
+              const active = selectedFaceIds.has(f.faceId);
+              return (
+                <li key={f.faceId}>
+                  <button
+                    className={`problem-item${active ? ' selected' : ''}`}
+                    data-testid={`problem-face-${f.faceId}`}
+                    onClick={() => selectFaces(new Set([f.faceId]))}
+                    title="点击在 3D / 2D 双视图定位该面"
+                  >
+                    <span className="pf-id">#{f.faceId + 1}</span>
+                    <span className="pf-tags">
+                      {f.issues.map((k) => (
+                        <i key={k} className={`tag ${k}`}>{ISSUE_LABEL[k]}</i>
+                      ))}
+                    </span>
+                    <span className="pf-metric">
+                      {fmt(f.areaMin, 2)}–{fmt(f.areaMax, 2)}×
+                      {' · '}{fmt(f.angleMax, 1)}°
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
       </section>
 
       <section>
@@ -164,9 +338,12 @@ export function StatsPanel() {
         <Row
           k="最小 / 最大比率"
           v={`${fmt(summary.minR)}× / ${fmt(summary.maxR)}×`}
-          cls={summary.maxR !== null && (summary.maxR > 2 || summary.minR! < 0.5) ? 'warn' : 'ok'}
+          cls={isAreaOut(summary.minR) || isAreaOut(summary.maxR) ? 'warn' : 'ok'}
         />
-        <p className="hint">比率 1× = 与中位密度一致；0.5× 偏稀，2× 偏密。</p>
+        <p className="hint">
+          比率 1× = 与中位密度一致；0.5× 偏稀，2× 偏密。
+          指标数值不随阈值改变。
+        </p>
       </section>
 
       <section>
@@ -174,7 +351,7 @@ export function StatsPanel() {
         <Row
           k="全模型最大内角偏差"
           v={`${fmt(summary.maxAngle, 1)}°`}
-          cls={summary.maxAngle !== null && summary.maxAngle > 15 ? 'warn' : 'ok'}
+          cls={isAngleOut(summary.maxAngle) ? 'warn' : 'ok'}
         />
         <p className="hint">对应 3D/UV 内角最大差值；0° 为保角映射。</p>
       </section>
@@ -188,10 +365,12 @@ export function StatsPanel() {
               k="面积畸变比率"
               v={selectedAgg.one.areaRatio === null ? '退化' : `${fmt(selectedAgg.one.areaRatio)}×`}
               hint={densityPct(selectedAgg.one.areaRatio)}
+              cls={isAreaOut(selectedAgg.one.areaRatio) ? 'warn' : undefined}
             />
             <Row
               k="角度畸变"
               v={selectedAgg.one.angleDistortion === null ? '退化' : `${fmt(selectedAgg.one.angleDistortion, 1)}°`}
+              cls={isAngleOut(selectedAgg.one.angleDistortion) ? 'warn' : undefined}
             />
             <Row k="3D / UV 面积" v={`${fmt(selectedAgg.one.area3d, 5)} / ${fmt(selectedAgg.one.areaUv, 5)}`} />
             <Row k="翻转" v={selectedAgg.one.flipped ? '是' : '否'}

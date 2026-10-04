@@ -96,6 +96,14 @@ export function Toolbar() {
         />
         重叠
       </label>
+      <label className="chk">
+        <input
+          type="checkbox"
+          checked={state.showRules}
+          onChange={() => toggleFlag('showRules')}
+        />
+        超限
+      </label>
 
       <span className="sep" />
 

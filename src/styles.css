@@ -142,6 +142,7 @@ body {
 .sw.nonmanifold { background: var(--bad); }
 .sw.flipped { background: #ff5c72; width: 10px; height: 10px; border-radius: 2px; }
 .sw.overlap { background: #ff8c0a; width: 10px; height: 10px; border-radius: 2px; }
+.sw.rule { background: #b873ff; width: 10px; height: 10px; border-radius: 2px; }
 .sw.selected { background: var(--accent); width: 10px; height: 10px; border-radius: 2px; }
 
 /* Panel */
@@ -182,6 +183,84 @@ body {
   cursor: pointer;
 }
 .hint { color: var(--muted); font-size: 11px; margin: 6px 0 0; }
+
+/* 规则区 */
+.rule-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+.rule-row .k { color: var(--muted); }
+.rule-range { display: inline-flex; align-items: center; gap: 4px; }
+.rule-x { color: var(--muted); font-size: 11px; }
+.rule-input {
+  width: 64px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 3px 6px;
+  font-variant-numeric: tabular-nums;
+}
+.rule-actions { display: flex; gap: 8px; margin: 8px 0 2px; }
+.toolbar button.mini,
+.panel button.mini {
+  padding: 4px 8px;
+  font-size: 11px;
+  border-radius: 5px;
+}
+.panel button.mini.primary {
+  background: #11394a;
+  border-color: #1d5a75;
+  color: #bdeeff;
+}
+
+/* 问题面列表 */
+.problem-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.problem-list li { border-bottom: 1px solid rgba(255,255,255,0.04); }
+.problem-list li:last-child { border-bottom: none; }
+.problem-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 5px 8px;
+  cursor: pointer;
+  text-align: left;
+  font-size: 11px;
+}
+.problem-item:hover { background: rgba(66, 199, 255, 0.08); }
+.problem-item.selected { background: rgba(66, 199, 255, 0.18); }
+.pf-id { font-variant-numeric: tabular-nums; color: var(--accent); min-width: 30px; }
+.pf-tags { display: inline-flex; gap: 3px; }
+.tag {
+  font-style: normal;
+  font-size: 10px;
+  padding: 0 5px;
+  border-radius: 3px;
+  line-height: 16px;
+}
+.tag.density-low { background: #17324d; color: #7fb4ff; }
+.tag.density-high { background: #4d1726; color: #ff8fb0; }
+.tag.angle { background: #3a2156; color: #cfa8ff; }
+.pf-metric {
+  margin-left: auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
 
 /* Notice */
 .notice {

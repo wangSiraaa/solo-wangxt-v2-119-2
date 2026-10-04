@@ -8,6 +8,7 @@ import {
   buildSelectionOverlay,
   makeCheckerTexture,
 } from '../three/geometry';
+import { evaluateRules } from '../core/rules';
 import type { MeshData } from '../core/types';
 
 export function View3D() {
@@ -134,6 +135,13 @@ export function View3D() {
 
   // 模型/标记变化时重建几何
   const { mesh: meshData, stats } = state;
+  const evaluation = useMemo(
+    () => (meshData && stats ? evaluateRules(meshData, stats, state.rules) : null),
+    [meshData, stats, state.rules],
+  );
+  const framedMeshRef = useRef<MeshData | null>(null);
+
+  // 几何主体：仅在换模型或切换棋盘时重建；调阈值不进这里，相机不跳。
   useEffect(() => {
     const world = worldRef.current;
     if (!world || !meshData || !stats) return;
@@ -143,13 +151,6 @@ export function View3D() {
     world.meshData = meshData;
     const geo = world.mesh.geometry;
     geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    const colors = buildFlagColors(
-      meshData,
-      stats,
-      state.showFlipped,
-      state.showOverlap,
-    );
-    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
     // 棋盘纹理
     const mat = world.mesh.material as THREE.MeshStandardMaterial;
@@ -198,17 +199,35 @@ export function View3D() {
       new THREE.Float32BufferAttribute(linePos, 3),
     );
 
-    // 取景：首次或换模型时居中
-    const box = geo.boundingBox!;
-    const center = box.getCenter(new THREE.Vector3());
-    const r = box.getSize(new THREE.Vector3()).length() / 2 || 1;
-    world.camera.position.copy(center).add(new THREE.Vector3(1.6 * r, 1.1 * r, 2.0 * r));
-    world.camera.near = r / 100;
-    world.camera.far = r * 100;
-    world.camera.updateProjectionMatrix();
-    world.controls.target.copy(center);
-    world.controls.update();
-  }, [meshData, stats, state.checkerOn, state.checkerScale, state.showFlipped, state.showOverlap]);
+    // 取景：仅首次或换模型（meshData 引用变化）时居中；调阈值/标记不动相机。
+    if (framedMeshRef.current !== meshData) {
+      framedMeshRef.current = meshData;
+      const box = geo.boundingBox!;
+      const center = box.getCenter(new THREE.Vector3());
+      const r = box.getSize(new THREE.Vector3()).length() / 2 || 1;
+      world.camera.position.copy(center).add(new THREE.Vector3(1.6 * r, 1.1 * r, 2.0 * r));
+      world.camera.near = r / 100;
+      world.camera.far = r * 100;
+      world.camera.updateProjectionMatrix();
+      world.controls.target.copy(center);
+      world.controls.update();
+    }
+  }, [meshData, stats, state.checkerOn, state.checkerScale]);
+
+  // 异常/超限顶点色：只更新 color 属性，调阈值时轻量刷新、不重建几何。
+  useEffect(() => {
+    const world = worldRef.current;
+    if (!world || !meshData || !stats) return;
+    const colors = buildFlagColors(
+      meshData,
+      stats,
+      state.showFlipped,
+      state.showOverlap,
+      evaluation?.triMask ?? null,
+      state.showRules,
+    );
+    world.mesh.geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  }, [meshData, stats, state.showFlipped, state.showOverlap, state.showRules, evaluation]);
 
   // 选择集 -> 覆盖网格
   useEffect(() => {

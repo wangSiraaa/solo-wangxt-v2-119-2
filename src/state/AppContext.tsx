@@ -12,6 +12,8 @@ import type { MeshData, MeshStats, ProjectRecord } from '../core/types';
 import { parseObj } from '../core/parser';
 import { analyzeMesh } from '../core/metrics';
 import { exportObj } from '../core/exporter';
+import { DEFAULT_RULES } from '../core/rules';
+import type { CheckRules } from '../core/rules';
 import { unwrapWithXAtlas } from '../core/unwrapping';
 import {
   deleteProject,
@@ -37,6 +39,9 @@ export interface AppState {
   checkerScale: number;
   showFlipped: boolean;
   showOverlap: boolean;
+  showRules: boolean;
+  /** 本次检查规则（面积比率区间 + 最大角度偏差），只影响判定不影响 UV。 */
+  rules: CheckRules;
   unwrapping: boolean;
   notice: Notice | null;
   history: MeshData[];
@@ -48,7 +53,8 @@ type Action =
   | { type: 'select'; faceIds: Set<number> }
   | { type: 'toggle-face'; faceId: number }
   | { type: 'set-checker'; on: boolean; scale?: number }
-  | { type: 'toggle-flag'; key: 'showFlipped' | 'showOverlap' }
+  | { type: 'toggle-flag'; key: 'showFlipped' | 'showOverlap' | 'showRules' }
+  | { type: 'set-rules'; rules: CheckRules }
   | { type: 'unwrapping'; on: boolean }
   | { type: 'notice'; notice: Notice | null }
   | { type: 'project-id'; id: string | null }
@@ -93,6 +99,9 @@ function reducer(state: AppState, action: Action): AppState {
       };
     case 'toggle-flag':
       return { ...state, [action.key]: !state[action.key] };
+    case 'set-rules':
+      // 仅改变判定阈值：不重算指标、不触碰 UV，metrics/stats 引用不变。
+      return { ...state, rules: action.rules };
     case 'unwrapping':
       return { ...state, unwrapping: action.on };
     case 'notice':
@@ -121,7 +130,8 @@ export interface AppContextValue {
   selectFaces: (faceIds: Set<number>) => void;
   toggleFace: (faceId: number) => void;
   setChecker: (on: boolean, scale?: number) => void;
-  toggleFlag: (key: 'showFlipped' | 'showOverlap') => void;
+  toggleFlag: (key: 'showFlipped' | 'showOverlap' | 'showRules') => void;
+  setRules: (rules: CheckRules) => void;
   runUnwrap: () => Promise<void>;
   exportCurrent: () => void;
   saveCurrent: () => Promise<void>;
@@ -147,6 +157,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     checkerScale: 8,
     showFlipped: true,
     showOverlap: true,
+    showRules: true,
+    rules: DEFAULT_RULES,
     unwrapping: false,
     notice: null,
     history: [] as MeshData[],
@@ -211,8 +223,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const setChecker = useCallback((on: boolean, scale?: number) => {
     dispatch({ type: 'set-checker', on, scale });
   }, []);
-  const toggleFlag = useCallback((key: 'showFlipped' | 'showOverlap') => {
+  const toggleFlag = useCallback((key: 'showFlipped' | 'showOverlap' | 'showRules') => {
     dispatch({ type: 'toggle-flag', key });
+  }, []);
+  const setRules = useCallback((rules: CheckRules) => {
+    dispatch({ type: 'set-rules', rules });
   }, []);
 
   const runUnwrap = useCallback(async () => {
@@ -339,6 +354,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       toggleFace,
       setChecker,
       toggleFlag,
+      setRules,
       runUnwrap,
       exportCurrent,
       saveCurrent,
@@ -350,7 +366,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       undo,
     }),
     [state, projects, loadObjText, selectFaces, toggleFace, setChecker,
-      toggleFlag, runUnwrap, exportCurrent, saveCurrent, refreshProjects,
+      toggleFlag, setRules, runUnwrap, exportCurrent, saveCurrent, refreshProjects,
       openProject, removeProject, notify, undo],
   );
 

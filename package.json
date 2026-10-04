@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:core": "esbuild scripts/test-core.ts --bundle --format=esm --platform=node --outfile=node_modules/.tmp/core.mjs && node node_modules/.tmp/core.mjs",
+    "test:rules": "esbuild scripts/test-rules.ts --bundle --format=esm --platform=node --outfile=node_modules/.tmp/rules.mjs && node node_modules/.tmp/rules.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",

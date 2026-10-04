@@ -15,8 +15,8 @@ npm run preview    # 预览构建产物
 Node 侧核心测试与无头浏览器端到端测试：
 
 ```bash
-npx esbuild scripts/test-core.ts --bundle --format=esm --platform=node \
-  --outfile=/tmp/t.mjs && node /tmp/t.mjs
+npm run test:core     # 解析/指标/身份/导出往返
+npm run test:rules    # 可调检查规则：阈值收紧/放宽、退化隔离、JSON 摘要
 npx esbuild scripts/test-unwrap-fail.ts --bundle --format=esm --platform=node \
   --outfile=/tmp/u.mjs && node /tmp/u.mjs
 
@@ -38,7 +38,8 @@ node --import tsx scripts/e2e.ts
 | 棋盘纹理辅助判断 | 程序化 Canvas 棋盘，可开关、可选 4/8/16/32 格 |
 | 面积畸变 / 角度畸变分别显示 | `src/core/metrics.ts`，面板分区显示 |
 | 退化面不参与普通比率计算 | 薄片（sliver）判据，比率与角度为 `null` |
-| 镜像岛、共享边接缝、非流形边样例 | 「样例」菜单四个内置模型 |
+| 美术验收规则可调（面积区间 + 角度阈值） | `src/core/rules.ts`，侧栏设阈值、按面出超限、导出 JSON 摘要 |
+| 镜像岛、共享边接缝、非流形边样例 | 「样例」菜单五个内置模型 |
 | 自动展开失败保留原模型 | `runUnwrap` 只在成功返回时 `replace-mesh`；入参不被修改 |
 | 导出 UV 可被标准工具重载验证 | 非索引 `v/vt` OBJ；e2e 已做导出→重载往返断言 |
 
@@ -74,6 +75,29 @@ UV 岛的连通要求**同时**满足 3D 共享边且该边两端 UV 一致—�
   比率/角度为 `—`，也不参与岛间重叠检测。
 - **岛间重叠**：包围盒分桶 + Sutherland–Hodgman 求交面积，跨岛且
   交叠面积显著非零才标记。
+
+## 本次检查规则（可调，只判定不改 UV）
+
+侧栏「本次检查规则」可设置**面积比率允许区间**（`minRatio × ~
+maxRatio ×`）与**最大角度偏差**（度）。判定由 `src/core/rules.ts`
+的纯函数 `evaluateRules` 在既有 `MeshStats` 上派生：
+
+- **按面报告**：n 边形扇形三角化后，任一三角越界即该面越界；面级
+  给出 `areaRatioMin/Max`、`angleDistortionMax`。列表可点击，在 3D
+  与 2D 双视图同时高亮定位；顶栏「超限」开关控制视图着色。
+- **边界取等号不超限**（带相对浮点容差，吸收 `45.00000000000001`
+  类误差）。
+- **退化面不算密度/角度超限**：其比率与角度本就是 `null`，规则
+  直接跳过；翻转/重叠/退化沿用 `metrics.ts` 既有算法，与阈值无关。
+- **改阈值只改判定**：不重算指标、不触碰 UV，面板上的最小/最大
+  比率与角度数值在收紧/放宽前后保持不变，只有被报告的面集合增减。
+- 规则存在会话状态里，切样例、重新载入模型（含导出 OBJ 再读回）
+  后仍可正常检查。
+
+「导出 JSON 摘要」落一份 `<模型名>_check.json`，与当前界面同源
+（同一个 `RuleEvaluation`），包含：规则、模型名/面数、全局指标、
+各类问题计数、每个问题面的 `faceId`/`issues`/比率与角度极值/
+三角归属，以及翻转/重叠/退化面 ID 列表。
 
 ## xatlas 身份映射
 

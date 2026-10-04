@@ -25,6 +25,7 @@ function Legend() {
       <span><i className="sw nonmanifold" /> 非流形边</span>
       <span><i className="sw flipped" /> 翻转</span>
       <span><i className="sw overlap" /> 岛间重叠</span>
+      <span><i className="sw rule" /> 规则超限</span>
       <span><i className="sw selected" /> 选中</span>
     </div>
   );

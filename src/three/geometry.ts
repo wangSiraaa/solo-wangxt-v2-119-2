@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { MeshData, MeshStats } from '../core/types';
+import { RULE_ANGLE, RULE_HIGH, RULE_LOW } from '../core/rules';
 import { cornerPos, cornerUv } from '../core/parser';
 
 /**
@@ -39,6 +40,8 @@ export function buildFlagColors(
   stats: MeshStats,
   showFlipped: boolean,
   showOverlap: boolean,
+  ruleMask?: Uint8Array | null,
+  showRules?: boolean,
 ): Float32Array {
   const out = new Float32Array(mesh.triangles.length * 9).fill(1);
   for (const t of mesh.triangles) {
@@ -47,6 +50,7 @@ export function buildFlagColors(
     if (m.degenerate3d || m.degenerateUv) color = [0.35, 0.35, 0.4];
     else if (showOverlap && stats.overlap[t.id]) color = [1.0, 0.55, 0.05];
     else if (showFlipped && m.flipped) color = [1.0, 0.25, 0.35];
+    else if (showRules && ruleMask && ruleMask[t.id] !== 0) color = ruleTint(ruleMask[t.id]);
     if (color) {
       for (let k = 0; k < 3; k++) {
         out[t.id * 9 + k * 3] = color[0];
@@ -56,6 +60,17 @@ export function buildFlagColors(
     }
   }
   return out;
+}
+
+/**
+ * 规则超限着色：角度紫、偏密红、偏稀蓝；同一面多重超限时角度优先。
+ * 仅用于提示，翻转/重叠/退化着色优先级仍在其之上。
+ */
+function ruleTint(mask: number): [number, number, number] {
+  if (mask & RULE_ANGLE) return [0.72, 0.45, 1.0];
+  if (mask & RULE_HIGH) return [1.0, 0.42, 0.62];
+  if (mask & RULE_LOW) return [0.45, 0.68, 1.0];
+  return [1, 1, 1];
 }
 
 /** 给定选中面集合，构造用于叠加高亮的非索引几何（三角形 id 顺序不变）。 */
@@ -144,7 +159,12 @@ export function buildUvSelection(
 export function buildUvFills(
   mesh: MeshData,
   stats: MeshStats,
-  opts: { showFlipped: boolean; showOverlap: boolean },
+  opts: {
+    showFlipped: boolean;
+    showOverlap: boolean;
+    ruleMask?: Uint8Array | null;
+    showRules?: boolean;
+  },
 ): THREE.BufferGeometry {
   const pos: number[] = [];
   const col: number[] = [];
@@ -159,6 +179,8 @@ export function buildUvFills(
     if (m.degenerate3d || m.degenerateUv) rgb = [0.32, 0.32, 0.38];
     else if (opts.showOverlap && stats.overlap[t.id]) rgb = [1.0, 0.55, 0.1];
     else if (opts.showFlipped && m.flipped) rgb = [1.0, 0.35, 0.45];
+    else if (opts.showRules && opts.ruleMask && opts.ruleMask[t.id] !== 0)
+      rgb = ruleTint(opts.ruleMask[t.id]);
     else rgb = islandColor(islandOfTri[t.id]);
 
     for (let k = 0; k < 3; k++) {
